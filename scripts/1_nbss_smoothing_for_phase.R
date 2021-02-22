@@ -8,11 +8,10 @@ library(parallel)
 library(data.table)
 source("scripts/utils.R")
 
-set.seed(195893)
+set.seed(59932)
 
 compute_dispersions=TRUE
-ncores=5
-
+ncores=6
 
 # load data ---------------------------------------------------------------
 
@@ -60,7 +59,11 @@ world <- world %>%
 # States with zero weekends
 swz <- c("Michigan", "Connecticut")
 
-world <- world %>% filter(administrative_area_level_2=='New York')
+# Remove the Diamond Princess (does not make sense to include here)
+world <- world %>% 
+  filter(!(administrative_area_level_1 %in% c("Diamond Princess", "Tanzania")))
+
+
 
 # NBSS growth rate estimation -----------------------------------------------------------
 

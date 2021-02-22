@@ -113,7 +113,8 @@ nbss <- function(x,remove_outliers=TRUE,filtering=FALSE,dispersion=NULL){
       return(-ll)
     }
     
-    res <- optim(c(-1), function(y) logLik_nb(x, y), method="Brent", lower=-2, upper=2) 
+    res <- tryCatch(optim(c(-1), function(y) logLik_nb(x, y), method="Brent", lower=-2, upper=2) , error=function(e) NULL)
+    if (is.null(res)) return(NULL)
     fit <- nb_model(x, res$par)
   } else {
     fit <- tryCatch(nb_model(x,dispersion),error=function(e) NULL)
@@ -198,13 +199,12 @@ fit_covid_ssm <- function(d, series="new_confirmed", precomputed_dispersions=NUL
   dat <- dat %>% 
     arrange(date)
   dat$cs = cumsum(ifelse(is.na(dat[,series]), 0, dat[,series]))
-  dat <- dat %>% filter(cs > 0)
-  # dat$cs[dat$cs==0] <- NA
+  pass <- dat$cs > 0 # rows to keep in analysis 
+  # dat <- dat %>% filter(cs > 0)
   
   
-  if (nrow(dat) < 10) return(cbind(d, error="not enough non-zero"))
+  if (nrow(dat[pass,]) < 10) return(cbind(d, error="not enough non-zero"))
   
-  # dat[[series]] <- ifelse(is.na(dat[['cs']]),NA, dat[[series]])
   
   # Remove weekend zeros
   dat[[series]] <- ifelse((dat[[series]] == 0) & (format(dat$date, "%u") %in% c(6,7)), 
@@ -218,20 +218,22 @@ fit_covid_ssm <- function(d, series="new_confirmed", precomputed_dispersions=NUL
   
   
   # outlier detection for early outbreak
-  dat <- custom_processors(dat)
-  if (sum(dat[,series]!=0, na.rm=TRUE) < 10) return(cbind(d, error="not enough non-zero"))
+  pass <- custom_processors(dat, pass)
+  if (sum(dat[pass,series]!=0, na.rm=TRUE) < 10) return(cbind(d, error="not enough non-zero"))
   tryCatch({
-    tmp <-getElement(dat,series)
+    tmp <-getElement(dat,series)[pass]
     #tmp <- ifelse(is.na(tmp), 0, tmp)
     tmp <- na.approx(tmp)
     outlier_filtered_ts <- tmp %>% outlier_detection
-    outlier_filtered_ts[is.na(getElement(dat, series))] <- NA
-    dat <- mutate(dat, series=outlier_filtered_ts)    
+    outlier_filtered_ts[is.na(getElement(dat, series)[pass])] <- NA
+    tmp <- rep(NA, nrow(dat))
+    tmp[pass] <- outlier_filtered_ts
+    dat <- mutate(dat, series=tmp)    
   },  error = function(err){
     return(cbind(d, error="outlier detection errored"))
   })
   
-  if (length(dat[,series][!is.na(dat[,series])]) < 10) return(cbind(d, error="too many NA"))
+  if (length(dat[pass,series][!is.na(dat[pass,series])]) < 10) return(cbind(d, error="too many NA"))
   
   
   if (!is.null(precomputed_dispersions)){
@@ -239,12 +241,14 @@ fit_covid_ssm <- function(d, series="new_confirmed", precomputed_dispersions=NUL
     res$par <- dplyr::filter(precomputed_dispersions, id==unique(dat$id))$dispersion
     if (length(res$par)==0) return(cbind(d, error="could not find precomputed dispersions")) # no precomputed dispersion (previously was not able to fit likely)
   } else {
-    res <- optim(c(-1), function(x) logLik_nb(dat, x), method="Brent", lower=-2, upper=3)    
+    res <- tryCatch(optim(c(-1), function(x) logLik_nb(dat[pass,], x), method="Brent", lower=-2, upper=3), 
+                    error = function(e) NULL)
+    if (is.null(res)) return(cbind(d, error="dispersion optimization failed"))
     if (res$convergence != 0) return(cbind(d, error="dispersion optimization failed"))
   }
   
   # now fit the model with the optimized dispersion parameters
-  fit <- nb_model(dat, res$par)
+  fit <- nb_model(dat[pass,], res$par)
   if(return_fit) return(fit)
   if (fit$optim.out$convergence != 0) return(cbind(d, error="model optimiztion (not dispersion) failed"))
   if (filtering==FALSE){
@@ -320,7 +324,11 @@ fit_covid_ssm <- function(d, series="new_confirmed", precomputed_dispersions=NUL
     if (any(out$p97.5_signal > 1e6)) return(cbind(d, error="97.5_signal > 1e6"))
   }
   if (quantile(abs(out$z_score_growth_rate), probs=0.75) < 0.4) return(cbind(d, error="quantile(abs(out$z_score_growth_rate), probs=0.75) < 0.4"))
-  return(cbind(dat, out))
+  
+  tack_on <- matrix(NA, nrow=nrow(dat), ncol=ncol(out)) %>% as.data.frame()
+  colnames(tack_on) <- colnames(out)
+  tack_on[pass,] <- out
+  return(cbind(dat, tack_on))
 }
 
 
@@ -359,7 +367,8 @@ covid19_nbss <- function(dat,series="new_confirmed", level='all',
       library(data.table)
     })
     parallel::clusterExport(cl,c("custom_processors", "outlier_detection", "fit_covid_ssm"))
-    fits <- parLapply(cl, tmp,  function(x) fit_covid_ssm(x, series, precomputed_dispersions,filtering=filtering))
+    fits <- parLapply(cl, tmp,  function(x,series,precomputed_dispersions,filtering) fit_covid_ssm(x, series, precomputed_dispersions,filtering=filtering),
+                      series=series,precomputed_dispersions=precomputed_dispersions,filtering=filtering)
     stopCluster(cl)
     rm('cl')
   }
@@ -368,20 +377,19 @@ covid19_nbss <- function(dat,series="new_confirmed", level='all',
 }
 
 
-custom_processors <- function(dat){
+custom_processors <- function(dat,pass){
   # Iowa and Indiana
   # if (unique(dat$administrative_area_level_2)%in%c("Iowa", "Indiana", "Kentucky")){
   
   if (unique(dat$administrative_area_level_1)=="United States"){
     if (!is.na(unique(dat$administrative_area_level_2))){
       if (unique(dat$administrative_area_level_2 != "Washington")){
-        dat <- dat %>% 
-          filter(date > ymd("2020-02-28") )
+        pass <- pass & (dat$date > ymd("2020-02-28") )
       }
     }
     # Insert new US custom processors here
   }
-  return(dat)
+  return(pass)
 }
 
 
