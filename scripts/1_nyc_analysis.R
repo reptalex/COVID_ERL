@@ -25,9 +25,6 @@ g_cd <- ggplot(nyc[date<=lockdown_date],aes(date,new_confirmed))+
   scale_y_continuous('N(t)',trans='log',breaks=10^(0:4))+
   ggtitle('Cases (red), Deaths (black)')
 
-
-
-
 # Exposed projections -----------------------------------------------------
 
 lockdown_deaths <- NYC[date==lockdown_date,new_deaths]
@@ -75,8 +72,6 @@ g_hypoth <- ggplot(nyc[date<=lockdown_date],aes(date,new_confirmed))+
            label='IFR=0.01',size=8)+
   annotate(geom='text',x=as.Date('2020-03-01'),y=nyc$population[1]*1.3,
            label='HIT',size=8)
-g_hypoth
-
 
 # IFR - r and HIT boundary plot -------------------------------------------
 
@@ -162,8 +157,8 @@ g_NY_HIT <- ggarrange(ggarrange(blnk,g_r_density,blnk,ncol=3,widths=c(0.1,4,1),a
           nrow=2,heights=c(1,d),align='v')
 
 
-ggarrange(g_hypoth,g_NY_HIT,ncol=2,labels = c("A",'B') )
-ggsave('figures/nyc_hit_plausibility.png',height=8,width=17,units='in')
+# ggarrange(g_hypoth,g_NY_HIT,ncol=2,labels = c("A",'B') )
+# ggsave('figures/nyc_hit_plausibility.png',height=8,width=17,units='in')
 
 
 
@@ -184,36 +179,17 @@ dum[,sum((lockdown_deaths/IFR3)*exp(growth_rate*20)>0.6*nyc$population[1])]/n
 US_counties[,lagged_dpc:=shift(deaths,11,type='lead')/population,by=c('state','county')]
 NYC <- US_counties[county=='New York City']
 NYC[,region:=county]
-EssexNJ <- US_counties[state=='New Jersey' & county=='Essex']
-EssexNJ[,region:="Essex, NJ"]
-Boston <- US_counties[state=='Massachusetts' & county=='Suffolk']
-Boston[,region:='Suffolk, MA']
-Detroit <- US_counties[state=='Michigan' & county=='Wayne']
-Detroit[,region:="Detroit, MI"]
-Nawlins <- US_counties[state=='Louisiana' & county=='Orleans']
-Nawlins[,region:='New Orleans']
 
-load('data/fits.RData')
-fits <- as.data.table(fits)
-Lombardy <- fits[administrative_area_level==2 & administrative_area_level_2=='Lombardia']
-Lombardy[,lagged_dpc:=shift(deaths,11,type='lead')/population]
-Lombardy[,region:='Lombardy, Italy']
+nyc_max <- NYC[growth_rate<0,min(lagged_dpc,na.rm=T)]
 
-cols <- c('date','growth_rate','lagged_dpc','region','new_confirmed','new_deaths','p2.5_growth_rate','p97.5_growth_rate')
-X <- rbind(NYC[,cols,with=F],
-           EssexNJ[,cols,with=F],
-           Boston[,cols,with=F],
-           Detroit[,cols,with=F],
-           Nawlins[,cols,with=F],
-           Lombardy[,cols,with=F])
-X[,region:=factor(region,levels = c(setdiff(unique(region),'New York City'),'New York City'))]
+NYC[,alt_hypoth:=lagged_dpc*(0.006/nyc_max)]
 
-
-g_rD <- ggplot(X[date<as.Date('2020-05-01')],aes(lagged_dpc,growth_rate,col=region))+
+g_rD <- ggplot(NYC[date<as.Date('2020-05-01')],aes(lagged_dpc,growth_rate))+
   geom_hline(yintercept = 0)+
-  geom_line(lwd=2)+
+  geom_line(aes(alt_hypoth),lwd=2,lty=2)+
+  geom_line(lwd=2,col='red')+
   geom_vline(xintercept = 0.006,lty=2,lwd=2)+
-  geom_ribbon(data=X[date<as.Date('2020-05-01') & region=='New York City'],
+  geom_ribbon(data=NYC[date<as.Date('2020-05-01')],
               aes(ymin=p2.5_growth_rate,ymax=p97.5_growth_rate),fill='red',alpha=0.2,
               show.legend=FALSE)+
   scale_x_continuous('D(t+11)',trans='log',limits=c(1e-5,6e-3),breaks=10^(-5:-2))+
@@ -221,9 +197,10 @@ g_rD <- ggplot(X[date<as.Date('2020-05-01')],aes(lagged_dpc,growth_rate,col=regi
   theme_bw(base_size=15)+
   theme(legend.position=c(0.75,0.7))+
   scale_color_manual(values=c(viridis(5),'red'))+
-  ggtitle("Timescale of deaths")
+  ggtitle("NYC r(D)")
 
 
 ggarrange(ggarrange(g_hypoth,g_NY_HIT,ncol=2,labels = c("A",'B')),
                     g_rD,labels=c(NA,'C'),nrow=2,heights=c(1.5,1))
 ggsave('figures/nyc_hit_plausibility_2.png',height=12,width=16,units='in')
+

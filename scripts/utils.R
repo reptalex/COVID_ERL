@@ -16,64 +16,64 @@ dfs <- function(x){
   x[x<0] <- NA
   return(x)
 }
-
-get_cori <- function(df.in, 
-                     icol_name, 
-                     out_name = 'Re_Cori',
-                     window = 1, 
-                     GI_mean=4, 
-                     GI_var=4.75^2,
-                     wend = TRUE){
-  
-  max.obs.time <- df.in %>% filter(!is.na(!!sym(icol_name))) %>% pull(time) %>% tail(1)
-  
-  
-  idat <- df.in %>%
-    #filter(get(icol_name) > 0 & !is.na(get(icol_name))) %>%
-    complete(time = 2:max.obs.time) %>%
-    arrange(time) %>%
-    filter(time <= max.obs.time)
-  
-  nas <- which(is.na(getElement(df.in,icol_name)))
-  df.in[nas,(icol_name):=0]
-  # idat[icol_name] <- na_to_0(idat[icol_name])
-  #mutate(cleaned = ifelse(is.na(!!sym(icol_name)) & time <= max.obs.time, 0, !!sym(icol_name)))
-  
-  
-  ts <- idat$time
-  ts <- ts[ts > 1 & ts <= (max(ts)-window+1)]
-  te <- ts+(window-1)
-  
-  estimate_R(
-    incid = pull(idat, !!icol_name),
-    method = "uncertain_si",
-    config = make_config(
-      list(
-        mean_si = GI_mean,
-        min_mean_si = GI_mean -1,
-        max_mean_si = GI_mean + 1,
-        std_mean_si = 1.5,
-        std_std_si = 1.5,
-        std_si = sqrt(GI_var),
-        min_std_si = sqrt(GI_var)*.8,
-        max_std_si = sqrt(GI_var)*1.2,
-        n1 = 50,
-        n2 = 100, 
-        t_start=ts,
-        t_end=te
-      )
-    )
-  ) -> outs
-  
-  R <- outs$R %>%
-    mutate(time = if(wend == TRUE) t_end else ceiling((t_end+t_start)/2) ) %>%
-    select(time, `Mean(R)`, `Quantile.0.025(R)`, `Quantile.0.975(R)`) %>%
-    setNames(c('time', paste0(out_name, '.mean'), paste0(out_name, '.025'), paste0(out_name, '.975'))) %>%
-    as.data.table
-  
-  R[,Cori.smooth:=frollapply(Re_Cori.mean,7,mean,align = 'right')]
-  return(R)
-}
+# 
+# get_cori <- function(df.in, 
+#                      icol_name, 
+#                      out_name = 'Re_Cori',
+#                      window = 1, 
+#                      GI_mean=4, 
+#                      GI_var=4.75^2,
+#                      wend = TRUE){
+#   
+#   max.obs.time <- df.in %>% filter(!is.na(!!sym(icol_name))) %>% pull(time) %>% tail(1)
+#   
+#   
+#   idat <- df.in %>%
+#     #filter(get(icol_name) > 0 & !is.na(get(icol_name))) %>%
+#     complete(time = 2:max.obs.time) %>%
+#     arrange(time) %>%
+#     filter(time <= max.obs.time)
+#   
+#   nas <- which(is.na(getElement(df.in,icol_name)))
+#   df.in[nas,(icol_name):=0]
+#   # idat[icol_name] <- na_to_0(idat[icol_name])
+#   #mutate(cleaned = ifelse(is.na(!!sym(icol_name)) & time <= max.obs.time, 0, !!sym(icol_name)))
+#   
+#   
+#   ts <- idat$time
+#   ts <- ts[ts > 1 & ts <= (max(ts)-window+1)]
+#   te <- ts+(window-1)
+#   
+#   estimate_R(
+#     incid = pull(idat, !!icol_name),
+#     method = "uncertain_si",
+#     config = make_config(
+#       list(
+#         mean_si = GI_mean,
+#         min_mean_si = GI_mean -1,
+#         max_mean_si = GI_mean + 1,
+#         std_mean_si = 1.5,
+#         std_std_si = 1.5,
+#         std_si = sqrt(GI_var),
+#         min_std_si = sqrt(GI_var)*.8,
+#         max_std_si = sqrt(GI_var)*1.2,
+#         n1 = 50,
+#         n2 = 100, 
+#         t_start=ts,
+#         t_end=te
+#       )
+#     )
+#   ) -> outs
+#   
+#   R <- outs$R %>%
+#     mutate(time = if(wend == TRUE) t_end else ceiling((t_end+t_start)/2) ) %>%
+#     select(time, `Mean(R)`, `Quantile.0.025(R)`, `Quantile.0.975(R)`) %>%
+#     setNames(c('time', paste0(out_name, '.mean'), paste0(out_name, '.025'), paste0(out_name, '.975'))) %>%
+#     as.data.table
+#   
+#   R[,Cori.smooth:=frollapply(Re_Cori.mean,7,mean,align = 'right')]
+#   return(R)
+# }
 
 # Requires to get sockets parallization to work on os x. 
 library(rstudioapi)
@@ -87,7 +87,15 @@ if (Sys.getenv("RSTUDIO") == "1" && !nzchar(Sys.getenv("RSTUDIO_TERM")) &&
 nbs <- function(x,name='growth_rate',remove_initial_zeros=TRUE,...){
   y <- rep(NA,length(x))
   first_nz <- min(which(x>0))
-  y[first_nz:length(x)] <- nbss(x[first_nz:length(x)],...) %>% getElement(name)
+  if (name=='all'){
+    mdl <- nbss(x[first_nz:length(x)],...)
+    
+    dd <- matrix(NA,nrow=first_nz-1,ncol=ncol(mdl))
+    colnames(dd) <- colnames(mdl)
+    y <- rbind(dd,mdl)
+  } else {
+    y[first_nz:length(x)] <- nbss(x[first_nz:length(x)],...)  %>% getElement(name)
+  }
   return(y)
 }
 
@@ -416,32 +424,6 @@ outlier_detection <- function(x){
   return(x)
 }
 
-# NbFit <- function(n,new_confirmed,date,half_life=NULL,day_of_week,z_score=FALSE){
-#   dd <- data.table('new_confirmed'=new_confirmed,
-#                    'date'=date,
-#                    'day_of_week'=day_of_week)
-#   
-#   dd <- dd[n]
-#   if (!is.null(half_life)){
-#     dd[,weight:=exp(as.numeric(date-min(date))*log(2)/half_life)]
-#   } else {
-#     dd[,weight:=1/.N]
-#   }
-#   
-#   fit <- glm(new_confirmed~date+day_of_week,family=nb,weights=weight,data=dd)
-#   # fit <- mgcv::gam(new_confirmed~date+day_of_week,family='nb',data=dd[n])
-#   if (z_score){
-#     if (!'gam' %in% class(fit)){
-#       
-#       summary(fit)$coefficients['date','z value'] %>%
-#         return
-#     } else {
-#       summary(fit)$p.t['date'] %>% return
-#     }
-#   } else {
-#     return(coef(fit)['date'])
-#   }
-# }
 
 seird_solve_intervention_relaxation <- function(t,state,parameters){
   with(as.list(c(t,state,parameters)),{
@@ -527,25 +509,11 @@ seird <- function(r,cfr=0.006,S0=3.27e8,start_date=as.Date('2020-01-15'),days=20
   
   out[is.na(D),D:=0]
   out[,new_deaths:=c(0,diff(D))]
-  out[,sample_deaths:=rpois(.N,lambda = new_deaths*const)]
-  # out[,new_confirmed:=rpois(.N,const*case_detection*I)]
+  # out[,sample_deaths:=rpois(.N,lambda = new_deaths*const)]
   out[,new_confirmed:=shift(rnbinom(.N,mu=case_detection*I*const,
                               size=nb_size),lag_onset_to_case)]
-  out[cumsum(sample_deaths)==0,sample_deaths:=NA]
+  # out[cumsum(sample_deaths)==0,sample_deaths:=NA]
   out[cumsum(new_confirmed)==0,new_confirmed:=NA]
-  
-  out[,n:=1:.N]
-  if (gr_estimation=='nbss'){
-    if (growth_rate_deaths){
-      out <- cbind(out,nbss(out$sample_deaths))
-    } else {
-      out <- cbind(out,nbss(out$new_confirmed))
-    }
-  } else {
-    out[,growth_rate:=rollapply(n,width=window_size,FUN=NbFit,fill=NA,
-                              new_confirmed=new_confirmed,date=date,half_life=half_life,
-                              day_of_week=day_of_week,align='right')]
-  }
   out$n <- NULL
   out[,r:=r]
   out[,cfr:=cfr]
@@ -560,3 +528,25 @@ seird <- function(r,cfr=0.006,S0=3.27e8,start_date=as.Date('2020-01-15'),days=20
   return(out)
 }
 
+plot_seird <- function(x,sep=FALSE){
+  dd <- data.table('N'=c(x$S,x$E,x$I,x$R,x$D))
+  dd$day <- rep(x$day,times=5)
+  dd$compartment <- rep(c('S','E','I','R','D'),each=nrow(x))
+  
+  g1 <- ggplot(dd[compartment != "D"],aes(day,N,color=compartment))+
+    geom_line(lwd=2)+
+    theme_bw(base_size=12)+
+    theme(legend.position=c(0.8,0.5))
+  g2 <- ggplot(dd[compartment=='D'],aes(day,N))+
+    geom_line(lwd=2)+
+    theme_bw(base_size=12)
+  g3 <- ggplot(x,aes(day,rt))+
+    geom_line(col='green',lwd=2)+
+    scale_y_continuous('r(t)')+
+    theme_bw(base_size=12)
+  if (sep){
+    return(list('SEIR'=g1,'D'=g2,'r'=g3))
+  } else {
+    return(ggarrange(g1,g2,g3,nrow=3,align='v'))
+  }
+}

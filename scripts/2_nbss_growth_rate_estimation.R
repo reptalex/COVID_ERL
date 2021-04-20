@@ -10,7 +10,7 @@ source("scripts/utils.R")
 
 set.seed(59932)
 
-compute_dispersions=TRUE
+compute_dispersions=FALSE
 ncores=6
 
 # load data ---------------------------------------------------------------
@@ -130,6 +130,8 @@ fits[,state:=administrative_area_level_2]
 fits[,county:=administrative_area_level_3]
 fits[,deaths_pc:=deaths/population]
 
+fits[county=='New York City'] %>%
+  write.csv('data/nbss_nyc.csv')
 
 fits[administrative_area_level==1] %>%
   write.csv('data/nbss_countries.csv')
