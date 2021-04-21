@@ -6,6 +6,8 @@ library(mgcv)
 library(qgam)
 library(visreg)
 library(usmap)
+library(parallel)
+ncores=7
 excluded_states <- c('Guam','Northern Mariana Islands','Virgin Islands','Puerto Rico','Rhode Island')
 ### The first four states above are too small with data that isn't reported with the same reliability as the other US states.
 ## The trajectory of Rhode Island is too irregular, with massive Monday spikes in the second wave but not the first.
@@ -197,7 +199,7 @@ g_reg <- US_counties[peak==1  & date>=as.Date('2020-08-01') & prominence_log>log
 # season ------------------------------------------------------------------
 
 
-g_season <- US_counties[peak==1 & prominence_log>log(3)& date>=as.Date('2020-04-01') & !is.na(week)] %>% 
+g_season <- US_counties[peak==1 & prominence_log>log(3)& date>=as.Date('2020-04-01') & !is.na(week) & !week %in% c('4','5')] %>% 
   ggplot(aes(week,log10(lagged_dpc)))+
   # geom_jitter(aes(cex=population),alpha=0.3)+
   geom_hline(yintercept=log10(nyc_max),lwd=2,col='red')+
@@ -265,16 +267,25 @@ US_counties[,dD:=log(shift(lagged_dpc,type='lead')/lagged_dpc),by=c('state','cou
 US_counties[,woy:=as.numeric(strftime(date,format='%V'))]
 US_counties[,ci_width:=p97.5_growth_rate-p2.5_growth_rate]
 
-gr <- gam(dr~s(woy,bs='cc')+te(growth_rate,log(lagged_dpc)),
-          data=US_counties[lagged_dpc>0])
-gD <- gam(dD~s(woy,bs='cc')+te(growth_rate,log(lagged_dpc)),
-          data=US_counties[!is.infinite(dD)])
 
 ili <- cdcfluview::ilinet(region = 'state') %>% as.data.table()
-ili[,list(avg=mean(ilitotal/total_patients,na.rm=T)),by=week][avg==max(avg)] ### week 52 had the maximum historical average of patients visiting doc with ILI
-wk=52  ### we'll predict the ERLs for the a priori estimated time of approximate maximum respiratory viral transmission across US counties
+ili_avg <- ili[,list(hist_ili=mean(ilitotal/total_patients,na.rm=T)),by=week]
+ili_avg[,woy:=week]
+ili_avg[which.max(hist_ili)] ### week 52 had the maximum historical average of patients visiting doc with ILI
+wk=12  ### we'll predict the ERLs for the a priori estimated time of approximate maximum respiratory viral transmission across US counties
+setkey(ili_avg,woy)
+setkey(US_counties,woy)
+US_counties <- US_counties[ili_avg[,c('woy','hist_ili')]]
+
+gr <- gam(dr~hist_ili+te(growth_rate,log(lagged_dpc)),
+          data=US_counties[lagged_dpc>0])
+gD <- gam(dD~hist_ili+te(growth_rate,log(lagged_dpc)),
+          data=US_counties[!is.infinite(dD)])
+
+
 n=10   ### number of vectors to draw on our plot
 grd <- expand.grid('woy'=wk,
+                   'hist_ili'=max(ili_avg$hist_ili),
                    'lagged_dpc'=10^seq(-5,log10(4e-3),length.out = n),
                    'growth_rate'=seq(-0.1,0.6,length.out=n)) %>% as.data.table
 
@@ -289,7 +300,8 @@ grd[,logD:=log(lagged_dpc)]   ## by log transform, making vector fields with vec
 grd <- grd[growth_rate-approx(nyc$lagged_dpc,nyc$p97.5_growth_rate,xout = grd$lagged_dpc)$y<0.2]
 
 ### Below, we impute the points on the NYC line for a finer estimation of where the ERL is rejected
-ny_impute <- data.table('logD'=seq(min(nyc[!is.infinite(logD)]$logD,na.rm=T),max(nyc$logD,na.rm=T),length.out=1e3))
+ny_impute <- data.table('logD'=seq(min(nyc[!is.infinite(logD)]$logD,na.rm=T),max(nyc$logD,na.rm=T),length.out=1e3),
+                        'hist_ili'=max(ili_avg$hist_ili))
 ny_impute[,lagged_dpc:=exp(logD)]
 ny_impute[,woy:=wk]
 ny_impute[,growth_rate:=approx(nyc$lagged_dpc,nyc$growth_rate,xout = lagged_dpc)$y]
@@ -303,30 +315,95 @@ ny_impute[,ERL:=c('ERL','Rejected')[as.numeric(slope_diff>0)+1]]
 grd[,dd:=dD/sqrt((dD^2+dr^2))]
 grd[,rr:=dr/sqrt((dD^2+dr^2))]
 
+# g_vec <- ggplot(grd,aes(logD,growth_rate))+
+#   geom_segment(aes(xend=logD+dd/n,yend=growth_rate+rr/n),arrow=arrow(length = unit(0.04,'inches')))+
+#   geom_line(data=nyc,lwd=2,col='red')+
+#   geom_ribbon(data=nyc,aes(ymin=p2.5_growth_rate,ymax=p97.5_growth_rate),fill='red',alpha=0.2)+
+#   scale_x_continuous('D(t+11)',breaks=log(10^(-5:-2)),limits=log(c(1e-5,4e-3)),labels = paste('1e-',5:2))+
+#   scale_y_continuous('r(t)',limits=c(-0.1,0.6))+
+#   theme_bw(base_size=12)+
+#   geom_vline(xintercept = log(3.6e-3),lty=2,lwd=2)+
+#   geom_point(data=ny_impute[ERL=='Rejected'],aes(color=ERL),cex=2)+
+#   geom_hline(yintercept = 0)+
+#   theme(legend.position=c(0.75,0.8))+
+#   scale_color_manual(values='yellow')+
+#   ggtitle('Expected r(D) Trajectories')
+
+### add lines of expected trajectories
+integrate_rd <- function(r0=0.5,D0=1e-5,Dmax=2e-3,woy=52,hist_ili=0.03782747,rmin=-0.1,gr.=gr,gD.=gD){
+  dd <- data.table('woy'=woy,'hist_ili'=hist_ili,'growth_rate'=r0,'lagged_dpc'=D0)
+  D <- D0
+  r <- r0
+  while(D<Dmax & r>rmin){
+    dr <- predict(gr,newdata=dd[.N])
+    dD <- predict(gD,newdata=dd[.N])
+    r <- r+dr
+    D <- D*exp(dD)
+    dd <- rbind(dd,data.table('woy'=woy,'hist_ili'=hist_ili,'growth_rate'=r,'lagged_dpc'=D))
+  }
+  dd[,logD:=log(lagged_dpc)] %>% return
+}
+
+### compute trajectories
+cl <- makeCluster(ncores)
+clusterEvalQ(cl,expr={library(data.table)
+                      library(magrittr)
+                      library(mgcv)})
+clusterExport(cl,varlist=c('gr','gD'))
+
+r_sampled <- seq(0,1,length.out = 60)
+traj_US <- parLapply(cl,r_sampled,integrate_rd,woy=wk)
+names(traj_US) <- 1:length(r_sampled)
+trajcs <- rbindlist(traj_US,use.names=T,idcol='trajectory')
+
+stopCluster(cl)
+rm('cl')
+gc()
+
+### find maximum fall growth rates across counties
+mx_fall_growth <- US_counties[date>as.Date('2020-08-01'),list(r=max(growth_rate,na.rm=T),
+                                                              D=lagged_dpc[which.max(growth_rate)],
+                                                              dt=date[which.max(growth_rate)]),by=c('state','county')]
+pt=mx_fall_growth[,list(growth_rate=median(r[!is.infinite(r)],na.rm=T),
+                     logD=median(log(D[D>0]),na.rm=T),
+                     dt=median(dt,na.rm=T))]
+### find median
+
+### October 28 was the median date of maximum growth across US counties.
+ix <- trajcs[,min((pt$growth_rate-growth_rate)^2+(pt$logD-logD)^2),by=trajectory][,trajectory[which.min(V1)]]
+nyc[,trajectory:='NYC ERL']
+
+dum <- rbind(nyc[,c('growth_rate','logD','trajectory')],
+             trajcs[trajectory %in% c(1,ix),c('growth_rate','logD','trajectory')])
+dum[trajectory==1,trajectory:='predicted']
+dum[trajectory==ix,trajectory:='US fall max']
+
 g_vec <- ggplot(grd,aes(logD,growth_rate))+
+  geom_line(data=trajcs,aes(group=trajectory),alpha=0.5)+
   geom_segment(aes(xend=logD+dd/n,yend=growth_rate+rr/n),arrow=arrow(length = unit(0.04,'inches')))+
   geom_line(data=nyc,lwd=2,col='red')+
-  geom_ribbon(data=nyc,aes(ymin=p2.5_growth_rate,ymax=p97.5_growth_rate),fill='red',alpha=0.2)+
-  scale_x_continuous('D(t+11)',breaks=log(10^(-5:-2)),limits=log(c(1e-5,4e-3)),labels = paste('1e-',5:2))+
-  scale_y_continuous('r(t)',limits=c(-0.1,0.6))+
   theme_bw(base_size=12)+
   geom_vline(xintercept = log(3.6e-3),lty=2,lwd=2)+
-  geom_point(data=ny_impute[ERL=='Rejected'],aes(color=ERL),cex=2)+
+  geom_line(data=dum,aes(size=trajectory,color=trajectory))+
+  geom_ribbon(data=nyc,aes(ymin=p2.5_growth_rate,ymax=p97.5_growth_rate),fill='red',alpha=0.4)+
+  scale_color_manual(values=c('red','black','black'))+
+  scale_size_manual(values=c(1.5,1,1.5))+
+  # geom_point(data=ny_impute[ERL=='Rejected'],aes(color=ERL),cex=2)+
   geom_hline(yintercept = 0)+
-  theme(legend.position=c(0.75,0.8))+
-  scale_color_manual(values='yellow')+
-  ggtitle('Expected r(D) Trajectories')
-
-
+  theme(legend.position=c(0.82,0.7))+
+  ggtitle('Expected r(D) Trajectories')+
+  scale_x_continuous('D(t+11)',breaks=log(10^(-5:-2)),limits=log(c(1e-5,4e-3)),labels = paste('1e-',5:2))+
+  scale_y_continuous('r(t)',limits=c(-0.1,0.6))+
+  geom_line(data=trajcs[trajectory==ix,],lwd=2)+
+  geom_point(data=pt,cex=4)
 
 # combining figures -------------------------------------------------------
 
 g_dynamics <- ggarrange(g_season,g_reg,nrow=2,align='v',labels = c("A","B"))
 g_endpoints <- ggarrange(g_rD_stop,g_vec,g_final_hist,nrow=3,ncol=1,labels=c('C',"D",'E'))
   
-ggarrange(g_dynamics,g_endpoints,widths=c(3,1),ncol=2)
-ggsave('figures/deaths_at_peaks_reg_season_largest_counties.png',height=8,width=16,units='in')
-
+ggarrange(g_dynamics,g_endpoints,widths=c(2.7,1),ncol=2)
+ggsave('figures/deaths_at_peaks_reg_season_largest_counties.png',height=9,width=17,units='in')
 
 
 # mask-wearing ------------------------------------------------------------
@@ -367,87 +444,3 @@ x[,total_lives_saved/(total_deaths)]
 # 0.1410244 -0.1235968
 # This model estimates an 14% in deaths had states outside New York not implemented mask-wearing mandates and colinear NPIs.
 # Model estimates 12.4% of deaths in states without mask-wearing mandates would have been saved by mask-wearing mandates.
-
-
-# Analysis of differential outcomes --------------------
-
-#### Below: scrapbook to use the resulting final_stop points to explain variation of burden at peak cases
-## lives saved
-## political, population, and regulation determinants of deaths at final pre-Feb peak.
-
-
- 
-final_stop[,delta:=(nyc_max-lagged_dpc)]
-final_stop[,deltaN:=delta*population]
-# 
-# final_stop[state!='New York'][order(deltaN)][!is.na(deltaN)]
-# 
-# ### deltaN - estimate of lives saved.
-# final_stop[,list(deltaN=sum(deltaN,na.rm=T),
-#                  avg=mean(delta,na.rm=T)),by=state] %>%
-  plot_usmap(regions='states',values = 'deltaN')
-# ### US_counties election results
-# 
-# 
-# 
-# ### must align final_stop and elections through fips
-# county.fips <- as.data.table(maps::county.fips)
-# 
-# final_stop[,polyname:=tolower(paste(state,county,sep=','))]
-# setkey(final_stop,polyname)
-# setkey(county.fips,polyname)
-# 
-# final_stop <- county.fips[final_stop]
-# 
-# plot_usmap(regions = 'counties',data=final_stop,values='deltaN')
-# ### from tonmcg's github repo downloaded on 3/23/21 from
-# ### https://github.com/tonmcg/US_County_Level_Election_Results_08-20
-# 
-# elections <- read.csv('data/US_County_Level_Election_Results_08-20-master/2016_US_County_Level_Presidential_Results.csv') %>%
-#   as.data.table
-# elections[,fips:=combined_fips]
-# setkey(elections,fips)
-# setkey(final_stop,fips)
-# elections <- elections[,c('fips','per_dem','per_gop')][final_stop]
-# elections[,per_point_diff:=per_gop-per_dem]
-# 
-# 
-# 
-# ggplot(elections,aes(per_point_diff,lagged_dpc_rel_to_state))+
-#   geom_point(aes(size=population,color=per_point_diff))+
-#   scale_color_gradient2(low='blue',mid = 'grey',high='red',midpoint = 0)+
-#   theme_bw()+
-#   geom_smooth()+
-#   geom_hline(yintercept = nyc_max,col='red',lwd=2)+
-#   scale_y_continuous(trans='log',breaks=10^(-5:-3))
-# 
-# elections[,nyc_diff:=lagged_dpc/nyc_max]
-# 
-# plot_usmap(regions='counties',data = elections[!is.na(fips)],values='nyc_diff')+
-#   scale_fill_gradient2(low='darkblue',mid='white',high='red',midpoint = 1)
-# 
-# 
-# ########## Outcome analysis
-# fit <- gam(cbind('Successes'=deaths,'Failures'=survivors)~s(datenum)+log10(population)+per_point_diff+mask_wearing+state,
-#            data=elections,family=binomial)
-# 
-# summary(fit)
-# 
-# ilogit <- function(x) 1/(1+exp(-x))
-# 
-# ests <- cumsum(fit$coefficients[c('(Intercept)','mask_wearingTRUE')]) + 4*fit$coefficients['log10(population)']
-# ilogit(ests)
-# 
-# ilogit(ests)[2]/ilogit(ests[1]) 
-
-
-
-## +13% increase in deaths from COVID at fall peak in a 10,000 person county of a less-regulated state.
-### This is a likely a limited view of the determinants of COVID mortality - state-specific effects, and more detailed county-level
-### data may improve our understanding of the importance of mask-wearing and many other NPIs in place.
-
-# Parametric coefficients:
-#                             Estimate Std. Error z value Pr(>|z|)    
-#   (Intercept)              -7.542121   0.014026 -537.74   <2e-16 ***
-#   log10(population)         0.124742   0.002474   50.42   <2e-16 ***
-#   mask_wearingTRUE -0.143259   0.004258  -33.64   <2e-16 ***
