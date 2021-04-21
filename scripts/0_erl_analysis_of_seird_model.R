@@ -26,7 +26,6 @@ lag_onset_to_death <- unique(x$lag_onset_to_death) ### this was a reporting lag 
 plot(shift(D,lag_onset_to_death,type='lead'),log(S0/(S0-Z))*mu/beta,pch=16,lwd=2)
 abline(0,1)
 
-
 # Analytical estimates of ERLs --------------------------------------------
 lD <- (1/(gamma+mu)+1/a)  ### lag for per-capita deaths to estimate cumulative incidence
 tau <- round(lD)+lag_onset_to_death
