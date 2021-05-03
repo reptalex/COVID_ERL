@@ -1,15 +1,17 @@
 library(magrittr)
 library(data.table)
 library(COVID19)
-
-plot_erl <- function(X=NULL,admin_level_1='India',admin_level_2=NULL,admin_level_3=NULL,
+library(ggpubr)
+plot_erl <- function(admin_level_1='India',admin_level_2=NULL,admin_level_3=NULL,X=NULL,
                       risk_rel_nyc=1/3,case_death_lag=11,line_col=rgb(0.1,0.8,0.2),
-                      min_date=as.Date('2020-01-01'),max_date=NULL,return_subplots=FALSE){
+                      min_date=as.Date('2020-01-01'),max_date=NULL,
+                      highlight_start=NULL,highlight_end=Inf,return_subplots=FALSE){
   if (is.null(max_date)){
     max_date <- Sys.Date()
   }
   nyc <- read.csv('data/nbss_nyc.csv') %>% as.data.table()
   nyc[,deaths_pc:=shift(deaths_pc,11,type='lead')]
+  nyc <- nyc[date<as.Date('2020-05-01')]
   swe <- read.csv('data/nbss_sweden.csv') %>% as.data.table()
   swe[,deaths_pc:=shift(deaths_pc,11,type='lead')]
   source('scripts/utils.R')
@@ -51,14 +53,23 @@ plot_erl <- function(X=NULL,admin_level_1='India',admin_level_2=NULL,admin_level
     theme_bw(base_size=15)+
     ggtitle("Cases (colored) and Deaths (black)")
   g_erl <- ggplot(X,aes(deaths_pc,growth_rate))+
+    geom_hline(yintercept = 0)+
     geom_line(data=nyc,color='red',lwd=2)+
     geom_line(data=swe,color=rgb(1,205/255,0),lwd=2)+
-    geom_line(lwd=2,)+
+    geom_line(lwd=2,col=line_col)+
     geom_line(col=line_col,lwd=2)+
     geom_line()+
     theme_bw(base_size=15)+
-    scale_x_continuous(trans='log',limits=c(1e-7,4e-3),breaks=10^(-7:-3))+
-    ggtitle(paste(paste(admin_level_1,admin_level_2,admin_level_3,sep=','),'ERL'))
+    scale_x_continuous(trans='log',limits=c(1e-7,4e-3),breaks=10^(-7:-3))
+  
+  ttl <- admin_level_1
+  if (!is.null(admin_level_2)){
+    ttl <- paste(ttl,admin_level_2,sep=',')
+  }
+  if (!is.null(admin_level_3)){
+    ttl <- paste(ttl,admin_level_3,sep=',')
+  }
+    g_erl <- g_erl+ggtitle(paste(ttl,'ERL'))
     
   if (risk_rel_nyc!=1){
     g_erl <- g_erl+geom_line(data=nyc,aes(x=deaths_pc*risk_rel_nyc),col='red')

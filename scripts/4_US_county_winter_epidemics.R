@@ -398,6 +398,9 @@ g_vec <- ggplot(grd,aes(logD,growth_rate))+
   geom_line(data=trajcs[trajectory==ix,],lwd=2)+
   geom_point(data=pt,cex=4)
 
+g_vec
+ggsave('figures/r_D_inferred_vector_field.png',height=10,width=10,units='in')
+
 # combining figures -------------------------------------------------------
 
 g_dynamics <- ggarrange(g_season,g_reg,nrow=2,align='v',labels = c("A","B"))
