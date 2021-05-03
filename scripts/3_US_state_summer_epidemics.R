@@ -315,9 +315,9 @@ fl2=fl+annotation_custom(ggplotGrob(fl.rt),
 
 
 # Georgia ---------------------------------------------------------------
-GA[date<as.Date('2020-04-08'),intervention:='none']
-GA[date>=as.Date('2020-04-08') & date<as.Date('2020-04-24'),intervention:='stay-at-home']
-GA[date>=as.Date('2020-04-24'),intervention:='reopening']
+GA[date<as.Date('2020-04-02'),intervention:='none']
+GA[date>=as.Date('2020-04-02') & date<as.Date('2020-04-30'),intervention:='stay-at-home']
+GA[date>=as.Date('2020-04-30'),intervention:='reopening']
 GA[,intervention:=factor(intervention,levels=unique(intervention))]
 
 ga <-  ggplot(GA,aes(deaths_pc,growth_rate,color=intervention))+

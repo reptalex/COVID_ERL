@@ -1,4 +1,5 @@
 library(viridis)
+library(ggpubr)
 source('scripts/utils.R')
 
 # seird parameters -------------------------------------------------------------------
@@ -88,6 +89,11 @@ um <- xx[scenario=='Unmitigated']
 um_pk <- um[day>10 & rt>0,max(lagged_dpc,na.rm=T)]  ##unmitigated peak
 ep <- xx[scenario=='Contained' & !is.na(lagged_dpc)][day==max(day)] #current state of contained epidemic
 r_max <- approx(um$lagged_dpc,um$rt,xout=ep$lagged_dpc)$y
+
+rejection_region <- xx[scenario=='Unmitigated',c('lagged_dpc','rt')]
+rejection_region <- rbind(rejection_region,rejection_region[lagged_dpc==max(lagged_dpc,na.rm=T)])
+rejection_region[.N,lagged_dpc:=6e-3]
+
 g_stop <- ggplot(xx[scenario %in% c('Unmitigated','Contained')],aes(lagged_dpc,rt))+
   geom_line(aes(color=scenario),lwd=2)+
   scale_x_continuous(name = NULL,trans='log',limits=c(1e-4,4e-3),breaks=10^(-4:-2),labels=NULL)+
@@ -102,7 +108,7 @@ g_stop <- ggplot(xx[scenario %in% c('Unmitigated','Contained')],aes(lagged_dpc,r
   geom_segment(aes(x=ep$lagged_dpc,xend=ep$lagged_dpc,
                    y=ep$rt,yend=r_max),
                arrow=arrow(),lty=2)+
-  geom_vline(xintercept = um_pk,lty=2,col=cols[1],lwd=2)+
+  geom_vline(xintercept = um_pk,col=cols[1])+
   geom_segment(aes(x=ep$lagged_dpc,xend=um_pk,y=ep$rt,yend=ep$rt),
                arrow=arrow(),lty=2)+
   geom_text(aes(x=ep$lagged_dpc*1.2,y=0.1,label='rho'),parse=TRUE,cex=12)+
@@ -111,7 +117,8 @@ g_stop <- ggplot(xx[scenario %in% c('Unmitigated','Contained')],aes(lagged_dpc,r
   theme(legend.position='none',
         strip.background = element_blank(),
         strip.text.x = element_blank())+
-  ggtitle('ERLs as Upper Bounds')
+  ggtitle('ERLs as Upper Bounds')+
+  geom_ribbon(data=rejection_region,aes(xmin=lagged_dpc,xmax=Inf,ymin=rt,ymax=Inf),alpha=0.1,fill='red')
 
 g_erl <- ggplot(xx[scenario %in% c('Unmitigated','Relaxation to ERL')],aes(lagged_dpc,rt))+
   geom_line(aes(color=scenario),lwd=2)+
@@ -122,12 +129,14 @@ g_erl <- ggplot(xx[scenario %in% c('Unmitigated','Relaxation to ERL')],aes(lagge
   theme(legend.position='none',
         strip.background = element_blank(),
         strip.text.x = element_blank())+
-  ggtitle('Corroboration of ERL')
+  ggtitle('Corroboration of ERL')+
+  geom_ribbon(data=xx[scenario=='Unmitigated'],aes(xmin=lagged_dpc,xmax=Inf,ymin=rt,ymax=Inf),alpha=0.1,fill='red')
 
 g_reject <- ggplot(xx[scenario %in% c('Unmitigated','ERL Rejected')],aes(lagged_dpc,rt))+
+  geom_ribbon(data=rejection_region,aes(ymin=rt,ymax=Inf),alpha=0.1,fill='red')+
   geom_line(aes(color=scenario),lwd=2)+
   scale_y_continuous('r(t)')+
-  scale_x_continuous(name = NULL,trans='log',limits=c(1e-4,6e-3),breaks=10^(-4:-2))+
+  scale_x_continuous(name = 'D(t+11)',trans='log',limits=c(1e-4,6e-3),breaks=10^(-4:-2))+
   scale_color_manual(values=cols[c(1,4)])+
   theme_bw(base_size=15)+
   theme(legend.position='none')+

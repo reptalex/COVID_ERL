@@ -10,7 +10,7 @@ source("scripts/utils.R")
 
 set.seed(59932)
 
-compute_dispersions=FALSE
+compute_dispersions=FALSE  # if TRUE, will recompute negative binomial dispersions
 ncores=6
 
 # load data ---------------------------------------------------------------
@@ -139,8 +139,8 @@ fits[administrative_area_level==1] %>%
 fits[country=='United States' & administrative_area_level==2] %>%
   write.csv('data/nbss_us_states.csv')
 
-fits[country=='Sweden' & administrative_area_level==2] %>%
-  write.csv('data/nbss_sweden_states.csv')
+fits[country=='Sweden' & administrative_area_level==1] %>%
+  write.csv('data/nbss_sweden.csv')
 
 fits[country=='United States' & administrative_area_level==3] %>%
   write.csv('data/nbss_us_counties.csv')

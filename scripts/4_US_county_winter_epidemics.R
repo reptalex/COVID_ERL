@@ -72,7 +72,8 @@ X <- US_counties[polyname %in% focal_polynames]
 X[,nyc_growth_rate:=approx(NYC$lagged_dpc,NYC$growth_rate,xout=lagged_dpc)$y]
 nyc_max <- US_counties[peak==1 & county=='New York City' & date<as.Date('2020-07-01'),lagged_dpc]
 
-
+X[date>as.Date('2020-08-01'),county_max:=max(prominence_log,na.rm=T),by=polyname]
+X[peak==1 & prominence_log==county_max,c('polyname','date','lagged_dpc')]
 
 
 g_pk <- ggplot(X,aes(date,new_confirmed))+
